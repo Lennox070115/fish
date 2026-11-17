@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的私人图床</title>
+    <style>
+        :root { --primary: #2ea44f; --bg: #f6f8fa; --border: #d0d7de; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; background-color: var(--bg); color: #24292f; margin: 0; padding: 20px; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        .card { background: white; border: 1px solid var(--border); border-radius: 6px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        h2 { margin-top: 0; font-size: 20px; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 15px;}
+        .input-group { display: flex; gap: 10px; margin-bottom: 15px; }
+        input[type="text"], input[type="password"] { flex: 1; padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+        button { background-color: var(--primary); color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; }
+        button:hover { background-color: #2c974b; }
+        button:disabled { background-color: #94d3a2; cursor: not-allowed; }
+        button.danger { background-color: #cf222e; }
+        button.danger:hover { background-color: #a40e26; }
+        button.secondary { background-color: #f6f8fa; color: #24292f; border: 1px solid var(--border); }
+        
+        #drop-zone { border: 2px dashed #bbbbbb; border-radius: 8px; padding: 40px; text-align: center; cursor: pointer; transition: 0.3s; background-color: #fafafa; }
+        #drop-zone.dragover { border-color: var(--primary); background-color: #eefbf1; }
+        
+        #status { margin-top: 10px; font-size: 14px; font-weight: bold; }
+        .success { color: var(--primary); }
+        .error { color: #cf222e; }
+        
+        .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 15px; margin-top: 20px; }
+        .file-card { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: white; display: flex; flex-direction: column;}
+        .file-preview { height: 150px; display: flex; align-items: center; justify-content: center; background: #f6f8fa; overflow: hidden; }
+        .file-preview img { max-width: 100%; max-height: 100%; object-fit: contain; }
+        .file-preview audio { width: 90%; }
+        .file-info { padding: 10px; font-size: 12px; word-break: break-all; }
+        .file-info .name { font-weight: bold; margin-bottom: 5px; color: #0969da; }
+        .file-actions { display: flex; gap: 5px; margin-top: 10px; }
+        .file-actions button { flex: 1; padding: 4px 8px; font-size: 12px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="card">
+        <h2>🔑 Token 设置</h2>
+        <p style="font-size: 12px; color: #57606a; margin-top: -5px;">请填入具有 repo 权限的 GitHub Personal Access Token。保存在本地浏览器，不会泄露。</p>
+        <div class="input-group">
+            <input type="password" id="token-input" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx">
+            <button onclick="saveToken()">保存 Token</button>
+        </div>
+        <div id="token-status" style="font-size: 14px;"></div>
+    </div>
+
+    <div class="card">
+        <h2>📤 上传文件</h2>
+        <div id="drop-zone">
+            <p>点击此处选择文件，或将文件拖拽到此处</p>
+            <p style="font-size: 12px; color: #57606a;">支持图片 (jpg, png, gif, webp, svg) 和音频 (mp3, wav, m4a)</p>
+            <input type="file" id="file-input" multiple style="display: none;">
+        </div>
+        <div id="status"></div>
+    </div>
+
+    <div class="card">
+        <h2>🖼️ 文件库</h2>
+        <button class="secondary" onclick="loadFiles()" style="margin-bottom: 10px;">刷新列表</button>
+        <div id="gallery" class="gallery"></div>
+    </div>
+</div>
+
+<script>
+    // === 配置信息 (自动使用当前仓库信息) ===
+    const USERNAME = 'Lennox070115';
+    const REPO = 'fish';
+    const BRANCH = 'main';
+    const API_BASE = `https://api.github.com/repos/${USERNAME}/${REPO}/contents/`;
+    // 外链前缀，注意如果没有自定义域名，这里就是默认的 github.io
+    const CDN_BASE = `https://${USERNAME}.github.io/${REPO}/`;
+
+    let token = localStorage.getItem('github_token') || '';
+
+    // === 初始化 ===
+    window.onload = () => {
+        if (token) {
+            document.getElementById('token-input').value = token;
+            document.getElementById('token-status').innerHTML = '<span class="success">✅ Token 已保存</span>';
+            loadFiles();
+        } else {
+            document.getElementById('token-status').innerHTML = '<span class="error">⚠️ 请先设置 Token</span>';
+        }
+    };
+
+    // === Token 保存 ===
+    function saveToken() {
+        const val = document.getElementById('token-input').value.trim();
+        if (!val) {
+            alert('Token 不能为空');
+            return;
+        }
+        localStorage.setItem('github_token', val);
+        token = val;
+        document.getElementById('token-status').innerHTML = '<span class="success">✅ Token 已保存</span>';
+        loadFiles();
+    }
+
+    // === 拖拽和点击上传 ===
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        handleFiles(e.dataTransfer.files);
+    });
+    fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
+    // === 处理上传 ===
+    async function handleFiles(files) {
+        if (!token) { alert('请先在上方设置 GitHub Token！'); return; }
+        for (let file of files) {
+            await uploadFile(file);
+        }
+        fileInput.value = ''; // 清空
+        loadFiles(); // 刷新列表
+    }
+
+    // === 文件转 Base64 (为上传准备) ===
+    function fileToBase64(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => resolve(reader.result.split(',')[1]); // 去掉 data:image/xxx;base64,
+            reader.onerror = error => reject(error);
+        });
+    }
+
+    // === 上传文件到 GitHub ===
+    async function uploadFile(file) {
+        const statusEl = document.getElementById('status');
+        statusEl.innerHTML = `<span style="color: #0969da;">⏳ 正在上传: ${file.name}...</span>`;
+        
+        try {
+            const base64Content = await fileToBase64(file);
+            // 为了保证文件名不冲突，可以加时间戳，这里按原文件名上传（有则覆盖）
+            const fileName = encodeURIComponent(file.name); 
+            
+            const res = await fetch(API_BASE + fileName, {
+                method: 'PUT',
+                headers: {
+                    'Authorization': `token ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    message: `Upload ${file.name}`,
+                    content: base64Content,
+                    branch: BRANCH
+                })
+            });
+
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.message || '上传失败');
+            }
+            statusEl.innerHTML = `<span class="success">✅ 上传成功: ${file.name}</span>`;
+        } catch (error) {
+            statusEl.innerHTML = `<span class="error">❌ 上传失败: ${file.name} - ${error.message}</span>`;
+        }
+    }
+
+    // === 获取文件列表 ===
+    async function loadFiles() {
+        if (!token) return;
+        const gallery = document.getElementById('gallery');
+        gallery.innerHTML = '<p>加载中...</p>';
+
+        try {
+            const res = await fetch(`${API_BASE}?ref=${BRANCH}`, {
+                headers: { 'Authorization': `token ${token}` }
+            });
+            if (!res.ok) throw new Error('获取文件失败，请检查 Token 权限');
+            
+            const files = await res.json();
+            gallery.innerHTML = '';
+
+            // 过滤掉隐藏文件和 index.html 自身
+            const validFiles = files.filter(f => f.type === 'file' && !f.name.startsWith('.') && f.name !== 'index.html');
+
+            if (validFiles.length === 0) {
+                gallery.innerHTML = '<p style="color:#57606a">仓库里还没有文件，快去上传吧！</p>';
+                return;
+            }
+
+            validFiles.forEach(file => {
+                const ext = file.name.split('.').pop().toLowerCase();
+                const fileUrl = CDN_BASE + file.name;
+                
+                const card = document.createElement('div');
+                card.className = 'file-card';
+
+                // 1. 预览区
+                let previewHtml = '';
+                if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)) {
+                    previewHtml = `<img src="${fileUrl}" alt="${file.name}" loading="lazy">`;
+                } else if (['mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac'].includes(ext)) {
+                    previewHtml = `<audio controls src="${fileUrl}"></audio>`;
+                } else {
+                    previewHtml = `<span style="font-size: 30px;">📄</span>`;
+                }
+
+                // 2. 操作区
+                card.innerHTML = `
+                    <div class="file-preview">${previewHtml}</div>
+                    <div class="file-info">
+                        <div class="name" title="${file.name}">${file.name}</div>
+                        <div class="input-group" style="margin-bottom: 5px;">
+                            <input type="text" value="${fileUrl}" readonly id="url-${file.sha}">
+                        </div>
+                        <div class="file-actions">
+                            <button class="secondary" onclick="copyUrl('${fileUrl}', this)">复制链接</button>
+                            <button class="secondary" onclick="window.open('${fileUrl}', '_blank')">打开</button>
+                            <button class="danger" onclick="deleteFile('${file.name}', '${file.sha}')">删除</button>
+                        </div>
+                    </div>
+                `;
+                gallery.appendChild(card);
+            });
+        } catch (error) {
+            gallery.innerHTML = `<p class="error">${error.message}</p>`;
+        }
+    }
+
+    // === 复制链接 ===
+    function copyUrl(url, btn) {
+        navigator.clipboard.writeText(url).then(() => {
+            const originalText = btn.innerText;
+            btn.innerText = '已复制!';
+            btn.style.color = 'var(--primary)';
+            setTimeout(() => { btn.innerText = originalText; btn.style.color = ''; }, 1500);
+        });
+    }
+
+    // === 删除文件 ===
+    async function deleteFile(fileName, sha) {
+        if (!confirm(`确定要删除 ${fileName} 吗？这不可恢复。`)) return;
+        
+        try {
+            const res = await fetch(API_BASE + encodeURIComponent(fileName), {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `token ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    message: `Delete ${fileName}`,
+                    sha: sha,
+                    branch: BRANCH
+                })
+            });
+            
+            if (!res.ok) throw new Error('删除失败');
+            loadFiles(); // 刷新
+        } catch (error) {
+            alert(error.message);
+        }
+    }
+</script>
+</body>
+</html>
